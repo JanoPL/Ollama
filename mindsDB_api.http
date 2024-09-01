@@ -1,0 +1,5 @@
+### API databases
+# curl --request GET
+#  --url http://127.0.0.1:47334/api/databases
+GET http://localhost:47334/api/databases
+

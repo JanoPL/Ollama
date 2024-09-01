@@ -1,0 +1,106 @@
+volumes:
+  open-webui: {}
+  ollama: {}
+  mindsdb: {}
+  mongodb: {}
+
+networks:
+  ollama-network:
+    driver: bridge
+
+services:
+  ollama:
+    image: ollama/ollama:${OLLAMA_DOCKER_TAG-latest}
+    container_name: ollama
+    tty: true
+    restart: unless-stopped
+    volumes:
+      - ollama:/root/.ollama
+    networks:
+      - ollama-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
+    healthcheck:
+      test: ollama --version || exit 1
+      interval: 30s
+
+  open-webui:
+    container_name: open-webui
+    image: ghcr.io/open-webui/open-webui:${WEBUI_DOCKER_TAG-main}
+    ports:
+      - ${OPEN_WEBUI_PORT-8080}:8080
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - WEBUI_SECRET_KEY=
+      - WEBUI_NAME=RedAlice
+      - WEBUI_AUTH=false
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    depends_on:
+      - ollama
+    restart: unless-stopped
+    volumes:
+      - open-webui:/app/backend/data
+    networks:
+      - ollama-network
+    healthcheck:
+      test: "${DOCKER_HEALTHCHECK_TEST:-curl http://localhost:8080/health}"
+      interval: 30s
+      retries: 3
+
+  mindsdb:
+    container_name: mindsdb
+    image: mindsdb/mindsdb:latest
+    restart: unless-stopped
+    ports:
+      - '47334:47334'
+      - '47335:47335'
+      - '47336:47336'
+    # watchfiles will reload the app when python files are changed
+    command: bash -c "watchfiles --filter python 'python -m mindsdb' ."
+    environment:
+      MINDSDB_DOCKER_ENV: "True"
+      MINDSDB_STORAGE_DIR: "/mindsdb/var"
+      FLASK_DEBUG: 1  # This will make sure http requests are logged regardless of log level
+      # MINDSDB_LOG_LEVEL: "DEBUG"
+      # OPENAI_API_KEY: "..."
+    volumes:
+      - mindsdb:/root/mdb_storage
+    depends_on:
+      - ollama
+    networks:
+      - ollama-network
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:47334/api/util/ping" ]
+      interval: 30s
+      timeout: 4s
+      retries: 3
+
+  mongo:
+    image: mongo
+    restart: always
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: example
+    volumes:
+      - mongodb:/data/db
+    networks:
+      - ollama-network
+
+  mongo-express:
+    image: mongo-express
+    restart: always
+    ports:
+      - 8081:8081
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: root
+      ME_CONFIG_MONGODB_ADMINPASSWORD: example
+      ME_CONFIG_MONGODB_URL: mongodb://root:example@mongo:27017/
+      ME_CONFIG_BASICAUTH: false
+    networks:
+      - ollama-network
